@@ -12,6 +12,7 @@ import {
   rmSync,
   readFileSync,
   readdirSync,
+  renameSync,
   statSync,
   copyFileSync,
   cpSync,
@@ -37,6 +38,17 @@ function repoDir(identifier: string): string {
 
 function storageDir(identifier: string): string {
   return join(extensionDir(identifier), "storage");
+}
+
+/** Cross-platform move: tries renameSync, falls back to cpSync+rmSync for cross-device moves. */
+function moveSync(from: string, to: string): void {
+  try {
+    renameSync(from, to);
+  } catch (err: any) {
+    if (err.code !== "EXDEV") throw err;
+    cpSync(from, to, { recursive: true, force: true, errorOnExist: false });
+    rmSync(from, { recursive: true, force: true });
+  }
 }
 
 // ─── Manifest parsing ────────────────────────────────────────────────────
@@ -112,12 +124,7 @@ function moveRootRepoToNestedRepo(extRootDir: string): void {
     const from = join(extRootDir, entry.name);
     const to = join(nestedRepoDir, entry.name);
 
-    const mvProc = Bun.spawnSync({ cmd: ["mv", from, to] });
-    if (mvProc.exitCode !== 0) {
-      throw new Error(
-        `Failed to normalize extension directory layout: ${mvProc.stderr.toString()}`
-      );
-    }
+    moveSync(from, to);
   }
 }
 
@@ -371,13 +378,12 @@ export async function install(
   const finalRepo = repoDir(manifest.identifier);
   mkdirSync(extDir, { recursive: true });
 
-  // Rename temp to repo dir
-  const mvProc = Bun.spawnSync({
-    cmd: ["mv", tempDir, finalRepo],
-  });
-  if (mvProc.exitCode !== 0) {
+  // Move temp to repo dir
+  try {
+    moveSync(tempDir, finalRepo);
+  } catch (err: any) {
     rmSync(tempDir, { recursive: true, force: true });
-    throw new Error("Failed to move cloned repo to extension directory");
+    throw new Error(`Failed to move cloned repo to extension directory: ${err.message}`);
   }
 
   // Create storage dir
@@ -767,10 +773,7 @@ export async function importLocalExtensions(): Promise<{
               `Target directory already exists for identifier ${manifest.identifier}`
             );
           }
-          const mvProc = Bun.spawnSync({ cmd: ["mv", candidateRoot, desiredRoot] });
-          if (mvProc.exitCode !== 0) {
-            throw new Error(`Failed to move extension directory: ${mvProc.stderr.toString()}`);
-          }
+          moveSync(candidateRoot, desiredRoot);
         }
 
         ensureRepoLayoutForIdentifier(manifest.identifier);
@@ -783,10 +786,7 @@ export async function importLocalExtensions(): Promise<{
               `Target directory already exists for identifier ${manifest.identifier}`
             );
           }
-          const mvProc = Bun.spawnSync({ cmd: ["mv", candidateRoot, desiredRoot] });
-          if (mvProc.exitCode !== 0) {
-            throw new Error(`Failed to move extension directory: ${mvProc.stderr.toString()}`);
-          }
+          moveSync(candidateRoot, desiredRoot);
         }
       }
 
