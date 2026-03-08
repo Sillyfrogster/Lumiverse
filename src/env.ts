@@ -1,3 +1,19 @@
+import { networkInterfaces } from "os";
+
+/** Returns all non-internal IPv4 addresses on the machine's LAN interfaces. */
+function getLanIPs(): string[] {
+  const ips: string[] = [];
+  try {
+    for (const iface of Object.values(networkInterfaces())) {
+      if (!iface) continue;
+      for (const addr of iface) {
+        if (addr.family === "IPv4" && !addr.internal) ips.push(addr.address);
+      }
+    }
+  } catch { /* ignore — non-critical */ }
+  return ips;
+}
+
 export interface EnvConfig {
   port: number;
   /** @deprecated Use resolveEncryptionKey() instead. Kept for migration only. */
@@ -67,7 +83,14 @@ export function loadEnv(): EnvConfig {
   const trustAnyOrigin = process.env.TRUST_ANY_ORIGIN === "true";
   const trustedOrigins = process.env.TRUSTED_ORIGINS
     ? process.env.TRUSTED_ORIGINS.split(",").map((o) => o.trim())
-    : [`http://localhost:${port}`, `http://127.0.0.1:${port}`];
+    : [
+        `http://localhost:${port}`,
+        `http://127.0.0.1:${port}`,
+        // Auto-include all LAN IPs so host-IP access works out of the box
+        // without requiring TRUST_ANY_ORIGIN. The T key in the runner still
+        // enables fully-open mode for external / mobile access.
+        ...getLanIPs().map((ip) => `http://${ip}:${port}`),
+      ];
   const trustedOriginsSet = new Set(trustedOrigins);
 
   const spindleEphemeralGlobalMaxBytes = parsePositiveIntEnv(
