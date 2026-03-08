@@ -49,6 +49,7 @@ function gradient(text: string, palette: number[] = GRADIENT): string {
 }
 
 function gradientLine(line: string, palette: number[] = GRADIENT, offset = 0): string {
+  if (!line) return ""; 
   if (!supportsColor) return line;
   let out = "";
   let ci = offset;
