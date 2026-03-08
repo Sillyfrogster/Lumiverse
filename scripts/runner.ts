@@ -409,38 +409,36 @@ async function applyUpdate(): Promise<void> {
     addLog("Backend dependencies updated.", "system");
   }
 
-  // Rebuild frontend if any frontend files changed
+  // Always rebuild frontend after an update — backend may serve stale
+  // bundled assets otherwise (e.g. template/CSS changes won't appear).
   const frontendDir = join(PROJECT_ROOT, "frontend");
-  const frontendChanged = changedFiles.split("\n").some((f) => f.startsWith("frontend/"));
 
-  if (frontendChanged) {
-    // Reinstall frontend dependencies if its package.json changed
-    if (changedFiles.includes("frontend/package.json")) {
-      addLog("frontend/package.json changed — reinstalling frontend dependencies...", "system");
-      const feInstallProc = Bun.spawn(["bun", "install"], {
-        cwd: frontendDir,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      await feInstallProc.exited;
-      addLog("Frontend dependencies updated.", "system");
-    }
-
-    addLog("Frontend files changed — rebuilding frontend...", "system");
-    const buildProc = Bun.spawn(["bun", "run", "build"], {
+  // Reinstall frontend dependencies if its package.json changed
+  if (changedFiles.includes("frontend/package.json")) {
+    addLog("frontend/package.json changed — reinstalling frontend dependencies...", "system");
+    const feInstallProc = Bun.spawn(["bun", "install"], {
       cwd: frontendDir,
       stdout: "pipe",
       stderr: "pipe",
     });
-    const buildOut = await new Response(buildProc.stdout).text();
-    const buildErr = await new Response(buildProc.stderr).text();
-    const buildCode = await buildProc.exited;
+    await feInstallProc.exited;
+    addLog("Frontend dependencies updated.", "system");
+  }
 
-    if (buildCode !== 0) {
-      addLog(`Frontend build failed: ${buildErr.trim() || buildOut.trim()}`, "system");
-    } else {
-      addLog("Frontend rebuilt successfully.", "system");
-    }
+  addLog("Rebuilding frontend...", "system");
+  const buildProc = Bun.spawn(["bun", "run", "build"], {
+    cwd: frontendDir,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const buildOut = await new Response(buildProc.stdout).text();
+  const buildErr = await new Response(buildProc.stderr).text();
+  const buildCode = await buildProc.exited;
+
+  if (buildCode !== 0) {
+    addLog(`Frontend build failed: ${buildErr.trim() || buildOut.trim()}`, "system");
+  } else {
+    addLog("Frontend rebuilt successfully.", "system");
   }
 
   addLog("Update complete. Restarting server...", "system");
