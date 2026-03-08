@@ -85,7 +85,16 @@ app.use(
 );
 
 // BetterAuth handler — BEFORE auth middleware
+// Rewrite the request URL to use the actual Host header so BetterAuth
+// constructs the correct redirect URLs and cookie domains when accessed via
+// a LAN IP instead of localhost
 app.on(["POST", "GET"], "/api/auth/*", (c) => {
+  const host = c.req.header("host");
+  if (host) {
+    const url = new URL(c.req.url);
+    const rewritten = new URL(url.pathname + url.search, `http://${host}`);
+    return auth.handler(new Request(rewritten.toString(), c.req.raw));
+  }
   return auth.handler(c.req.raw);
 });
 

@@ -45,3 +45,10 @@ const server = Bun.serve({
 eventBus.setServer(server);
 
 console.log(`Lumiverse Backend listening on ${server.hostname}:${server.port}`);
+
+// Log trusted origins so it's visible in the runner and easy to verify that LAN IPs were detected and applied automatically.
+if (env.trustAnyOrigin) {
+  console.log("[Auth] Trusted origins: ALL (TRUST_ANY_ORIGIN enabled)");
+} else {
+  console.log(`[Auth] Trusted origins:\n${env.trustedOrigins.map((o) => `  • ${o}`).join("\n")}`);
+}
