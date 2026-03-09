@@ -217,7 +217,8 @@ export function usePersonaBrowser() {
   const setLorebook = useCallback(
     async (id: string, worldBookId: string | null) => {
       const updated = await personasApi.update(id, {
-        attached_world_book_id: worldBookId || undefined,
+        // Pass value directly so null is sent to the backend for detachment
+        attached_world_book_id: worldBookId,
       })
       updatePersonaInStore(id, updated)
     },
