@@ -122,6 +122,7 @@ function ChatCard({ item, onClick }: ChatCardProps) {
 export default function LandingPage() {
   const navigate = useNavigate()
   const landingPageChatsDisplayed = useStore((s) => s.landingPageChatsDisplayed)
+  const openModal = useStore((s) => s.openModal)
 
   const [items, setItems] = useState<GroupedRecentChat[]>([])
   const [loading, setLoading] = useState(true)
@@ -188,9 +189,19 @@ export default function LandingPage() {
 
   const handleChatClick = useCallback(
     (item: GroupedRecentChat) => {
-      navigate(`/chat/${item.latest_chat_id}`)
+      // If the character only has 1 chat, just jump straight in
+      if (item.chat_count === 1) {
+        navigate(`/chat/${item.latest_chat_id}`)
+        return
+      }
+
+      openModal('chatPicker', {
+        characterId: item.character_id,
+        characterName: item.character_name,
+        onSelect: (chatId: string) => navigate(`/chat/${chatId}`)
+      })
     },
-    [navigate]
+    [navigate, openModal]
   )
 
   const handleNewChat = useCallback(() => {
@@ -331,7 +342,6 @@ export default function LandingPage() {
           <p>Select a character to continue your journey</p>
         </motion.footer>
       </motion.div>
-
     </div>
   )
 }

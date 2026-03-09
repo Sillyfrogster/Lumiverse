@@ -40,6 +40,15 @@ const REGEX_ESCAPE_PATTERN = /[.*+?^${}()|[\]\\]/g;
 export function activateWorldInfo(input: ActivationInput): ActivationResult {
   const { entries, messages, wiState } = input;
 
+  // 0. Cleanup wiState: Remove any keys that are no longer in the candidates list.
+  // This prevents hidden sticky/active entries from persisting after a lorebook is removed.
+  const entryUids = new Set(entries.map(e => e.uid));
+  for (const uid in wiState) {
+    if (!entryUids.has(uid)) {
+      delete wiState[uid];
+    }
+  }
+
   // 1. Filter disabled entries
   const candidates = entries.filter(e => !e.disabled);
 

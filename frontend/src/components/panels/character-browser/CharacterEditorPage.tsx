@@ -301,6 +301,8 @@ export default function CharacterEditorPage() {
     [debouncedSave]
   )
 
+  const clearActivatedWorldInfo = useStore((s) => s.clearActivatedWorldInfo)
+
   const handleAttachedWorldBookChange = useCallback(
     async (worldBookId: string) => {
       if (!editingCharacterId || !character) return
@@ -309,14 +311,18 @@ export default function CharacterEditorPage() {
       } as Record<string, any>
 
       if (worldBookId) nextExtensions.world_book_id = worldBookId
-      else delete nextExtensions.world_book_id
+      else {
+        delete nextExtensions.world_book_id
+        // Immediately clear the feedback panel so entries don't visually linger
+        clearActivatedWorldInfo()
+      }
 
       setExtensionsJson(JSON.stringify(nextExtensions, null, 2))
       setJsonError(null)
       showSaving()
       await browser.updateCharacter(editingCharacterId, { extensions: nextExtensions })
     },
-    [editingCharacterId, character, browser.updateCharacter, showSaving]
+    [editingCharacterId, character, browser.updateCharacter, showSaving, clearActivatedWorldInfo]
   )
 
   // Avatar

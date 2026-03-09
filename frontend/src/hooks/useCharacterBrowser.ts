@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router'
 import Fuse from 'fuse.js'
 import { charactersApi } from '@/api/characters'
 import { chatsApi } from '@/api/chats'
+import { get } from '@/api/client'
 import { useStore } from '@/store'
 import type { Character } from '@/types/api'
 import type { LorebookInfo } from '@/components/modals/BulkImportProgressModal'
@@ -352,9 +353,19 @@ export function useCharacterBrowser() {
   const openChat = useCallback(
     async (character: Character) => {
       try {
-        const existing = await chatsApi.list({ characterId: character.id, limit: 1 })
-        if (existing.data.length > 0) {
-          navigate(`/chat/${existing.data[0].id}`)
+        const chats = await get<any[]>('/chats/character-chats/' + character.id)
+        
+        if (chats.length === 1) {
+          navigate(`/chat/${chats[0].id}`)
+          return
+        }
+
+        if (chats.length > 1) {
+          openModal('chatPicker', {
+            characterId: character.id,
+            characterName: character.name,
+            onSelect: (chatId: string) => navigate(`/chat/${chatId}`)
+          })
           return
         }
 

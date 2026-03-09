@@ -534,8 +534,8 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     });
   }
 
-  // Emit activated world info event
-  if (activatedWorldInfo && activatedWorldInfo.length > 0) {
+  // Emit activated world info event (always emit so UI can clear stale entries)
+  if (activatedWorldInfo) {
     eventBus.emit(EventType.WORLD_INFO_ACTIVATED, {
       chatId: input.chat_id,
       entries: activatedWorldInfo,

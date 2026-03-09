@@ -11,6 +11,7 @@ import DryRunModal from './DryRunModal'
 import PromptItemizerModal from './PromptItemizerModal'
 import GroupChatCreatorModal from './GroupChatCreatorModal'
 import ManageChatsModal from './ManageChatsModal'
+import ChatPickerModal from './ChatPickerModal'
 import PermissionRequestModal from './PermissionRequestModal'
 
 export default function ModalContainer() {
@@ -71,6 +72,17 @@ export default function ModalContainer() {
       {activeModal === 'promptItemizer' && <PromptItemizerModal />}
       {activeModal === 'groupChatCreator' && <GroupChatCreatorModal />}
       {activeModal === 'manageChats' && <ManageChatsModal />}
+      {activeModal === 'chatPicker' && modalProps.characterId && modalProps.characterName && (
+        <ChatPickerModal
+          characterId={modalProps.characterId}
+          characterName={modalProps.characterName}
+          onSelect={(chatId) => {
+            modalProps.onSelect?.(chatId)
+            closeModal()
+          }}
+          onDismiss={closeModal}
+        />
+      )}
       {activeModal === 'lumiaEditor' && <LumiaEditorModal />}
       {activeModal === 'loomEditor' && <LoomEditorModal />}
       {activeModal === 'toolEditor' && <ToolEditorModal />}
