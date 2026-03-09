@@ -82,6 +82,13 @@ app.get("/:id/export", (c) => {
   return c.json(data);
 });
 
+app.get("/:id/tree", (c) => {
+  const userId = c.get("userId");
+  const tree = svc.getChatTree(userId, c.req.param("id"));
+  if (!tree) return c.json({ error: "Not found" }, 404);
+  return c.json(tree);
+});
+
 app.post("/:id/branch", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();

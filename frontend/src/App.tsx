@@ -27,6 +27,25 @@ export default function App() {
     }
   }, [isAuthenticated, loadSettings])
 
+  // Global Cmd+K / Ctrl+K shortcut to open the command palette
+  const openCommandPalette = useStore((s) => s.openCommandPalette)
+  const closeCommandPalette = useStore((s) => s.closeCommandPalette)
+  const commandPaletteOpen = useStore((s) => s.commandPaletteOpen)
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault()
+        if (commandPaletteOpen) {
+          closeCommandPalette()
+        } else {
+          openCommandPalette()
+        }
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [commandPaletteOpen, openCommandPalette, closeCommandPalette])
+
   // Apply modal-width mode as a root CSS variable so all modals can reference it
   const modalWidthMode = useStore((s) => s.modalWidthMode)
   const modalMaxWidth = useStore((s) => s.modalMaxWidth)

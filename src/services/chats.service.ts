@@ -489,6 +489,73 @@ export function branchChat(userId: string, chatId: string, atMessageId: string):
   return getChat(userId, newChatId)!;
 }
 
+// Branch tree
+
+export type ChatTreeNode = {
+  id: string
+  name: string
+  created_at: number
+  updated_at: number
+  message_count: number
+  branch_at_message: string | null
+  children: ChatTreeNode[]
+}
+
+function buildSubTree(userId: string, chatId: string, visited: Set<string>, depth: number): ChatTreeNode | null {
+  if (visited.has(chatId) || depth > 20) return null;
+  visited.add(chatId);
+
+  const chat = getChat(userId, chatId);
+  if (!chat) return null;
+
+  const db = getDb();
+  const countRow = db.query("SELECT COUNT(*) as count FROM messages WHERE chat_id = ?").get(chatId) as { count: number } | null;
+  const message_count = countRow?.count ?? 0;
+
+  const childRows = db.query(
+    `SELECT * FROM chats WHERE user_id = ? AND json_extract(metadata, '$.branched_from') = ? ORDER BY created_at ASC`
+  ).all(userId, chatId) as any[];
+
+  const children: ChatTreeNode[] = [];
+  for (const row of childRows) {
+    const child = buildSubTree(userId, row.id, visited, depth + 1);
+    if (child) children.push(child);
+  }
+
+  return {
+    id: chat.id,
+    name: chat.name,
+    created_at: chat.created_at,
+    updated_at: chat.updated_at,
+    message_count,
+    branch_at_message: (chat.metadata.branch_at_message as string) ?? null,
+    children,
+  };
+}
+
+export function getChatTree(userId: string, chatId: string): ChatTreeNode | null {
+  const chat = getChat(userId, chatId);
+  if (!chat) return null;
+
+  // root of the branch family
+  let rootId = chatId;
+  const ancestorVisited = new Set<string>();
+  ancestorVisited.add(chatId);
+  let current = chat;
+
+  while (current.metadata.branched_from) {
+    const parentId = current.metadata.branched_from as string;
+    if (ancestorVisited.has(parentId)) break;
+    ancestorVisited.add(parentId);
+    const parent = getChat(userId, parentId);
+    if (!parent) break;
+    rootId = parentId;
+    current = parent;
+  }
+
+  return buildSubTree(userId, rootId, new Set(), 0);
+}
+
 // --- Migration helpers ---
 
 export function createChatRaw(userId: string, input: { character_id: string; name?: string; metadata?: Record<string, any>; created_at?: number; updated_at?: number }): Chat {

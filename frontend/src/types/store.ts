@@ -131,6 +131,7 @@ export interface UISlice {
   settingsModalOpen: boolean
   settingsActiveView: string
   portraitPanelOpen: boolean
+  commandPaletteOpen: boolean
   toasts: Toast[]
   openModal: (name: string, props?: Record<string, any>) => void
   closeModal: () => void
@@ -142,6 +143,8 @@ export interface UISlice {
   openSettings: (view?: string) => void
   closeSettings: () => void
   togglePortraitPanel: () => void
+  openCommandPalette: () => void
+  closeCommandPalette: () => void
   addToast: (toast: Omit<Toast, 'id'>) => string
   removeToast: (id: string) => void
   clearToasts: () => void

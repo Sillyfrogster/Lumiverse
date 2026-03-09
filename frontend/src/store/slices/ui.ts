@@ -13,6 +13,7 @@ export const createUISlice: StateCreator<UISlice> = (set) => ({
   settingsModalOpen: false,
   settingsActiveView: 'general',
   portraitPanelOpen: false,
+  commandPaletteOpen: false,
   toasts: [],
 
   openModal: (name, props = {}) => set({ activeModal: name, modalProps: props }),
@@ -31,6 +32,9 @@ export const createUISlice: StateCreator<UISlice> = (set) => ({
   openSettings: (view = 'general') =>
     set({ settingsModalOpen: true, settingsActiveView: view }),
   closeSettings: () => set({ settingsModalOpen: false }),
+
+  openCommandPalette: () => set({ commandPaletteOpen: true }),
+  closeCommandPalette: () => set({ commandPaletteOpen: false }),
 
   togglePortraitPanel: () =>
     set((state) => ({ portraitPanelOpen: !state.portraitPanelOpen })),

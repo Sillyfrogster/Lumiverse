@@ -8,7 +8,8 @@
  * Run with: bun run migrate:st
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from "fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
+import { inflateSync } from "zlib";
 import { homedir } from "os";
 import { join, basename, extname, resolve } from "path";
 import { createInterface } from "readline";
@@ -26,7 +27,9 @@ import {
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
-const CHARACTER_BATCH_SIZE = 100;
+// Size-based batching: max ~30 MB of file data per request, max 50 files.
+const BATCH_MAX_BYTES = 30 * 1024 * 1024;
+const BATCH_MAX_FILES = 50;
 
 // ─── Input helpers ──────────────────────────────────────────────────────────
 
@@ -194,6 +197,175 @@ function parseMessageDate(msg: any): number {
   return Math.floor(Date.now() / 1000);
 }
 
+// PNG character name reader
+// Reads the embedded character name from a PNG file's tEXt/zTXt/iTXt chunk
+interface PNGCharaInfo {
+  embeddedName: string | null;
+  hasCharaData: boolean;
+  parseError?: string;
+}
+
+const PNG_SIGNATURE = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+const CHARA_KEYWORDS = new Set(["chara", "ccv3"]);
+
+function readPNGCharaName(filePath: string): PNGCharaInfo {
+  try {
+    const buf = readFileSync(filePath);
+
+    if (buf.length < 8 || !PNG_SIGNATURE.every((b, i) => buf[i] === b)) {
+      return { embeddedName: null, hasCharaData: false, parseError: "not a valid PNG" };
+    }
+
+    let offset = 8;
+    while (offset + 12 <= buf.length) {
+      const length = buf.readUInt32BE(offset);
+      const type = buf.subarray(offset + 4, offset + 8).toString("ascii");
+      const data = buf.subarray(offset + 8, offset + 8 + length);
+      offset += 12 + length; // 4 length + 4 type + N data + 4 CRC
+
+      if (type === "IEND") break;
+      if (type !== "tEXt" && type !== "zTXt" && type !== "iTXt") continue;
+
+      const nullIdx = data.indexOf(0);
+      if (nullIdx === -1) continue;
+      const keyword = data.subarray(0, nullIdx).toString("ascii");
+      if (!CHARA_KEYWORDS.has(keyword)) continue;
+
+      try {
+        const value = decodeTextChunk(type, data, nullIdx);
+        if (value !== null) return extractNameFromBase64JSON(value, keyword);
+      } catch {
+        return { embeddedName: null, hasCharaData: true, parseError: `${type} decode failed` };
+      }
+    }
+
+    return { embeddedName: null, hasCharaData: false };
+  } catch (err: any) {
+    return { embeddedName: null, hasCharaData: false, parseError: err.message };
+  }
+}
+
+function decodeTextChunk(type: string, data: Buffer, nullIdx: number): string | null {
+  if (type === "tEXt") {
+    return data.subarray(nullIdx + 1).toString("latin1");
+  }
+  if (type === "zTXt") {
+    return inflateSync(data.subarray(nullIdx + 2)).toString("latin1");
+  }
+  // iTXt: skip compression flag + method, language tag + \0, translated keyword + \0
+  const compressedFlag = data[nullIdx + 1];
+  const afterFlags = data.subarray(nullIdx + 3);
+  const langEnd = afterFlags.indexOf(0);
+  if (langEnd === -1) return null;
+  const transKeyEnd = afterFlags.indexOf(0, langEnd + 1);
+  if (transKeyEnd === -1) return null;
+  const valueBytes = afterFlags.subarray(transKeyEnd + 1);
+  return compressedFlag
+    ? inflateSync(valueBytes).toString("utf8")
+    : valueBytes.toString("utf8");
+}
+
+function extractNameFromBase64JSON(raw: string, keyword: string): PNGCharaInfo {
+  try {
+    const decoded = Buffer.from(raw.trim(), "base64").toString("utf8");
+    const parsed = JSON.parse(decoded);
+    // account for v3 and v2/1
+    const name: string | null = parsed.data?.name || parsed.name || null;
+    return { embeddedName: name, hasCharaData: true };
+  } catch {
+    return { embeddedName: null, hasCharaData: true, parseError: `${keyword} JSON decode failed` };
+  }
+}
+
+// Character scan
+
+interface ScanEntry {
+  filename: string;
+  stem: string;
+  embeddedName: string | null;
+  hasData: boolean;
+  parseError?: string;
+  sizeBytes: number;
+}
+
+function scanCharacters(charsDir: string): ScanEntry[] {
+  const pngFiles = readdirSync(charsDir).filter((f) => {
+    if (extname(f).toLowerCase() !== ".png") return false;
+    try { return statSync(join(charsDir, f)).isFile(); } catch { return false; }
+  });
+
+  const results: ScanEntry[] = [];
+  for (let i = 0; i < pngFiles.length; i++) {
+    const filename = pngFiles[i];
+    const filePath = join(charsDir, filename);
+    printProgress("Scanning character files", i + 1, pngFiles.length);
+    try {
+      const sizeBytes = statSync(filePath).size;
+      const info = readPNGCharaName(filePath);
+      results.push({
+        filename,
+        stem: basename(filename, ".png"),
+        embeddedName: info.embeddedName,
+        hasData: info.hasCharaData,
+        parseError: info.parseError,
+        sizeBytes,
+      });
+    } catch {
+      results.push({
+        filename,
+        stem: basename(filename, ".png"),
+        embeddedName: null,
+        hasData: false,
+        sizeBytes: 0,
+      });
+    }
+  }
+  clearProgress();
+  return results;
+}
+
+//Checkpoint helpers
+//
+// A checkpoint file is saved after characters are successfully imported.
+// This lets the user resume chat/worldbook import without re-uploading all PNGs
+// if something were to fail partway through.
+
+interface Checkpoint {
+  baseUrl: string;
+  effectiveDataDir: string;
+  filenameToId: Record<string, string>;
+  savedAt: number;
+}
+
+function checkpointPath(stDataDir: string): string {
+  return join(stDataDir, ".lumiverse-migration-checkpoint.json");
+}
+
+function loadCheckpoint(stDataDir: string): Checkpoint | null {
+  const path = checkpointPath(stDataDir);
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, "utf-8")) as Checkpoint;
+  } catch {
+    return null;
+  }
+}
+
+function saveCheckpoint(stDataDir: string, checkpoint: Checkpoint): void {
+  try {
+    writeFileSync(checkpointPath(stDataDir), JSON.stringify(checkpoint, null, 2), "utf-8");
+  } catch {
+    // don't crash if we can't write the checkpoint
+  }
+}
+
+function deleteCheckpoint(stDataDir: string): void {
+  const path = checkpointPath(stDataDir);
+  if (existsSync(path)) {
+    try { require("fs").unlinkSync(path); } catch { /* ignore */ }
+  }
+}
+
 // ─── SillyTavern data scanning ──────────────────────────────────────────────
 
 interface STDataCounts {
@@ -288,21 +460,24 @@ function scanSTData(stDataDir: string): STDataCounts {
 
 async function importCharacters(
   stDataDir: string
-): Promise<{ imported: number; skipped: number; failed: number; filenameToId: Map<string, string> }> {
+): Promise<{
+  imported: number;
+  skipped: number;
+  failed: number;
+  filenameToId: Map<string, string>;
+  failedFiles: Array<{ filename: string; reason: string }>;
+}> {
   const charsDir = join(stDataDir, "characters");
-  // Maps PNG filename stem (e.g. "SomeChar") → Lumiverse character ID.
-  // Chat directories in ST use the same filename stem, so this is the
-  // key link between imported characters and their chat histories.
   const filenameToId = new Map<string, string>();
+  const failedFiles: Array<{ filename: string; reason: string }> = [];
   let imported = 0;
   let skipped = 0;
   let failed = 0;
 
   if (!existsSync(charsDir)) {
-    return { imported, skipped, failed, filenameToId };
+    return { imported, skipped, failed, filenameToId, failedFiles };
   }
 
-  // Only .png files — ignore subdirectories (expression image folders)
   const pngFiles = readdirSync(charsDir).filter((f) => {
     if (extname(f).toLowerCase() !== ".png") return false;
     try {
@@ -313,35 +488,61 @@ async function importCharacters(
   });
   const total = pngFiles.length;
 
-  // Batch into groups
-  for (let batchStart = 0; batchStart < pngFiles.length; batchStart += CHARACTER_BATCH_SIZE) {
-    const batch = pngFiles.slice(batchStart, batchStart + CHARACTER_BATCH_SIZE);
+  // Build size-based batches — keeps requests small enough to avoid timeouts
+  const batches: string[][] = [];
+  let currentBatch: string[] = [];
+  let currentBatchBytes = 0;
+
+  for (const filename of pngFiles) {
+    const fileSize = statSync(join(charsDir, filename)).size;
+    if (currentBatch.length > 0 && (
+      currentBatchBytes + fileSize > BATCH_MAX_BYTES ||
+      currentBatch.length >= BATCH_MAX_FILES
+    )) {
+      batches.push(currentBatch);
+      currentBatch = [];
+      currentBatchBytes = 0;
+    }
+    currentBatch.push(filename);
+    currentBatchBytes += fileSize;
+  }
+  if (currentBatch.length > 0) batches.push(currentBatch);
+
+  let processedSoFar = 0;
+
+  for (const batch of batches) {
     const formData = new FormData();
     formData.set("skip_duplicates", "true");
 
+    const readableFiles: string[] = [];
     for (const filename of batch) {
       const filePath = join(charsDir, filename);
       try {
         const fileData = readFileSync(filePath);
         const blob = new Blob([fileData], { type: "image/png" });
         formData.append("files", blob, filename);
-      } catch (err) {
-        console.log(`\n    ${theme.warning}Could not read ${filename}, skipping${theme.reset}`);
+        readableFiles.push(filename);
+      } catch (err: any) {
+        clearProgress();
+        console.log(`    ${theme.warning}Could not read ${filename}: ${err.message}${theme.reset}`);
+        failedFiles.push({ filename, reason: `read error: ${err.message}` });
         failed++;
       }
+    }
+
+    if (readableFiles.length === 0) {
+      processedSoFar += batch.length;
+      printProgress("Importing characters", processedSoFar, total);
+      continue;
     }
 
     try {
       const result = await apiRequestWithRetry("POST", "/characters/import-bulk", undefined, formData);
       if (result.results) {
         for (const r of result.results) {
-          // r.filename is the original PNG filename we sent
           const stem = basename(r.filename || "", ".png");
-
           if (r.skipped) {
             skipped++;
-            // Character already exists — map the filename stem to the
-            // existing character so chats can be correlated later.
             if (r.character?.id && stem) {
               filenameToId.set(stem, r.character.id);
             }
@@ -350,19 +551,53 @@ async function importCharacters(
             if (stem) filenameToId.set(stem, r.character.id);
           } else {
             failed++;
+            if (r.filename) {
+              failedFiles.push({ filename: r.filename, reason: r.error || "server rejected" });
+            }
           }
         }
       }
     } catch (err: any) {
-      console.log(`\n    ${theme.error}Batch import failed: ${err.message}${theme.reset}`);
-      failed += batch.length;
+      // Whole batch failed — retry each file individually to get per-file results
+      clearProgress();
+      console.log(`\n    ${theme.warning}Batch of ${readableFiles.length} failed (${err.message}), retrying individually...${theme.reset}`);
+
+      for (const filename of readableFiles) {
+        const filePath = join(charsDir, filename);
+        try {
+          const fileData = readFileSync(filePath);
+          const singleForm = new FormData();
+          singleForm.set("skip_duplicates", "true");
+          singleForm.append("files", new Blob([fileData], { type: "image/png" }), filename);
+
+          const result = await apiRequestWithRetry("POST", "/characters/import-bulk", undefined, singleForm);
+          const r = result.results?.[0];
+          const stem = basename(filename, ".png");
+          if (r?.skipped) {
+            skipped++;
+            if (r.character?.id) filenameToId.set(stem, r.character.id);
+          } else if (r?.success && r?.character) {
+            imported++;
+            filenameToId.set(stem, r.character.id);
+          } else {
+            failed++;
+            failedFiles.push({ filename, reason: r?.error || "server rejected" });
+          }
+        } catch (singleErr: any) {
+          failed++;
+          failedFiles.push({ filename, reason: singleErr.message });
+        }
+        printProgress("Importing characters", ++processedSoFar, total);
+      }
+      continue;
     }
 
-    printProgress("Importing characters", Math.min(batchStart + batch.length, total), total);
+    processedSoFar += readableFiles.length;
+    printProgress("Importing characters", processedSoFar, total);
   }
 
   clearProgress();
-  return { imported, skipped, failed, filenameToId };
+  return { imported, skipped, failed, filenameToId, failedFiles };
 }
 
 async function importWorldBooks(
@@ -444,10 +679,6 @@ async function importPersonas(
     return { imported, failed, avatarsUploaded };
   }
 
-  // ST stores persona data under power_user in settings.json:
-  //   power_user.personas:             { "avatar.png": "Display Name", ... }
-  //   power_user.persona_descriptions: { "avatar.png": { description, title, position, depth?, role?, lorebook? }, ... }
-  // Both are keyed by avatar filename.
   let personaNames: Record<string, string>;
   let personaDescriptions: Record<string, any>;
   try {
@@ -459,8 +690,6 @@ async function importPersonas(
     return { imported, failed, avatarsUploaded };
   }
 
-  // Use persona_descriptions as the primary list (it has the richest data),
-  // but pull the display name from the personas object.
   const allKeys = new Set([...Object.keys(personaDescriptions), ...Object.keys(personaNames)]);
   if (allKeys.size === 0) {
     return { imported, failed, avatarsUploaded };
@@ -471,13 +700,11 @@ async function importPersonas(
   const personas: Array<{ name: string; description?: string; title?: string; folder?: string; attached_world_book_id?: string; metadata?: Record<string, any> }> = [];
 
   for (const avatarKey of entries) {
-    // Display name comes from the "personas" object; fall back to filename stem
     const name = personaNames[avatarKey] || basename(avatarKey, extname(avatarKey));
     const meta = personaDescriptions[avatarKey];
     const description = typeof meta === "string" ? meta : meta?.description || "";
     const title = typeof meta === "object" ? meta?.title || "" : "";
 
-    // Resolve attached lorebook by name
     const lorebookName = typeof meta === "object" ? meta?.lorebook || "" : "";
     const attached_world_book_id = lorebookName ? worldBookNameToId.get(lorebookName) : undefined;
 
@@ -563,18 +790,16 @@ async function importChats(
   }
 
   for (const charDirName of charDirs) {
-    // ST chat directory names correspond to the PNG filename stem of the
-    // character card, NOT the character's display name from the card metadata.
     const characterId = filenameToId.get(charDirName);
 
     if (!characterId) {
-      // No matching character was imported for this directory — skip
       const chatFiles = readdirSync(join(chatsDir, charDirName)).filter(
         (f) => extname(f).toLowerCase() === ".jsonl"
       );
       skippedChars++;
       processedChats += chatFiles.length;
-      console.log(`\n    ${theme.warning}No character found for "${charDirName}", skipping ${chatFiles.length} chat(s)${theme.reset}`);
+      clearProgress();
+      console.log(`    ${theme.warning}No character found for "${charDirName}", skipping ${chatFiles.length} chat(s)${theme.reset}`);
       printProgress("Importing chats", processedChats, totalChats);
       continue;
     }
@@ -583,7 +808,6 @@ async function importChats(
       (f) => extname(f).toLowerCase() === ".jsonl"
     );
 
-    // Build chat import batch for this character
     const chatsPayload: Array<{
       name?: string;
       metadata?: Record<string, any>;
@@ -617,7 +841,6 @@ async function importChats(
         try {
           const meta = JSON.parse(lines[0]);
           if (meta.chat_metadata || meta.user_name !== undefined) {
-            // This is ST metadata line — skip it for messages
             chatName = meta.chat_metadata?.name || chatName;
             if (meta.create_date) {
               const ts = parseDateString(meta.create_date);
@@ -632,7 +855,6 @@ async function importChats(
         const startLine = (() => {
           try {
             const first = JSON.parse(lines[0]);
-            // ST metadata lines have user_name or chat_metadata
             if (first.user_name !== undefined || first.chat_metadata) return 1;
           } catch { /* ignore */ }
           return 0;
@@ -679,7 +901,8 @@ async function importChats(
         processedChats++;
         printProgress("Importing chats", processedChats, totalChats);
       } catch (err) {
-        console.log(`\n    ${theme.warning}Could not read ${chatFile}, skipping${theme.reset}`);
+        clearProgress();
+        console.log(`    ${theme.warning}Could not read ${chatFile}, skipping${theme.reset}`);
         failed++;
         processedChats++;
         printProgress("Importing chats", processedChats, totalChats);
@@ -705,7 +928,8 @@ async function importChats(
           }
         }
       } catch (err: any) {
-        console.log(`\n    ${theme.error}Chat import failed for "${charDirName}": ${err.message}${theme.reset}`);
+        clearProgress();
+        console.log(`    ${theme.error}Chat import failed for "${charDirName}": ${err.message}${theme.reset}`);
         failed += chatsPayload.length;
       }
     }
@@ -737,7 +961,6 @@ async function importGroupChats(
   let processedChats = 0;
   let totalChatsToProcess = 0;
 
-  // First pass: count total chat files across all groups
   for (const gf of groupFiles) {
     try {
       const group = JSON.parse(readFileSync(join(groupsDir, gf), "utf-8"));
@@ -758,7 +981,6 @@ async function importGroupChats(
     const groupName: string = group.name || "Imported Group Chat";
     const chatIds: string[] = group.chats || [];
 
-    // Resolve member filenames to character IDs
     const memberCharIds: string[] = [];
     let missingMembers = false;
     for (const memberFile of members) {
@@ -774,16 +996,17 @@ async function importGroupChats(
     if (memberCharIds.length === 0) {
       skippedGroups++;
       processedChats += chatIds.length;
-      console.log(`\n    ${theme.warning}No members found for group "${groupName}", skipping${theme.reset}`);
+      clearProgress();
+      console.log(`    ${theme.warning}No members found for group "${groupName}", skipping${theme.reset}`);
       printProgress("Importing group chats", processedChats, totalChatsToProcess);
       continue;
     }
 
     if (missingMembers) {
-      console.log(`\n    ${theme.warning}Some members missing for "${groupName}", importing with available members${theme.reset}`);
+      clearProgress();
+      console.log(`    ${theme.warning}Some members missing for "${groupName}", importing with available members${theme.reset}`);
     }
 
-    // Import each chat file for this group
     for (const chatId of chatIds) {
       const chatFilePath = join(groupChatsDir, `${chatId}.jsonl`);
       if (!existsSync(chatFilePath)) {
@@ -802,7 +1025,6 @@ async function importGroupChats(
           continue;
         }
 
-        // Line 0 may be metadata
         let chatCreatedAt: number | undefined;
         try {
           const meta = JSON.parse(lines[0]);
@@ -858,8 +1080,6 @@ async function importGroupChats(
           continue;
         }
 
-        // Use createChatRaw to create the group chat — first member as character_id,
-        // metadata flags it as a group with all member IDs
         if (!chatCreatedAt && group.create_date) {
           const ts = parseDateString(group.create_date);
           if (ts) chatCreatedAt = ts;
@@ -889,7 +1109,8 @@ async function importGroupChats(
           }
         }
       } catch (err: any) {
-        console.log(`\n    ${theme.warning}Failed to import group chat "${chatId}": ${err.message}${theme.reset}`);
+        clearProgress();
+        console.log(`    ${theme.warning}Failed to import group chat "${chatId}": ${err.message}${theme.reset}`);
         failed++;
       }
 
@@ -910,10 +1131,9 @@ async function main() {
 
   // ─── Step 1: Authentication ─────────────────────────────────────────────
 
-  printStepHeader(1, 6, "Authentication", "Connect to your Lumiverse instance.");
+  printStepHeader(1, 7, "Authentication", "Connect to your Lumiverse instance.");
 
   baseUrl = await ask("Lumiverse URL", "http://localhost:7860");
-  // Remove trailing slash
   baseUrl = baseUrl.replace(/\/+$/, "");
 
   const username = await ask("Username");
@@ -924,10 +1144,8 @@ async function main() {
     process.exit(1);
   }
 
-  // Authenticate
   console.log(`\n  ${theme.muted}Authenticating...${theme.reset}`);
 
-  // Try username@lumiverse.local first (BetterAuth username plugin pattern)
   const emailVariants = [
     `${username}@lumiverse.local`,
     username,
@@ -948,13 +1166,11 @@ async function main() {
       const sessionCookie = setCookie.find((c: string) => c.includes("better-auth.session_token"));
 
       if (sessionCookie) {
-        // Extract full cookie value
         authCookie = sessionCookie.split(";")[0];
         authenticated = true;
         break;
       }
 
-      // Also check response body for token
       if (res.ok) {
         const body = await res.json().catch(() => null);
         if (body?.token) {
@@ -973,7 +1189,6 @@ async function main() {
     process.exit(1);
   }
 
-  // Verify auth works
   try {
     await apiRequest("GET", "/settings");
     console.log(`  ${theme.success}Authenticated successfully.${theme.reset}\n`);
@@ -986,7 +1201,7 @@ async function main() {
 
   // ─── Step 2: SillyTavern Directory ──────────────────────────────────────
 
-  printStepHeader(2, 6, "SillyTavern Directory", "Point to your SillyTavern installation.");
+  printStepHeader(2, 7, "SillyTavern Directory", "Point to your SillyTavern installation.");
 
   let stPath = await ask("SillyTavern path", "~/SillyTavern");
   stPath = stPath.replace(/^~/, homedir());
@@ -1000,12 +1215,8 @@ async function main() {
   const stUser = await ask("ST user directory", "default-user");
   const stDataDir = join(stPath, "data", stUser);
 
-  // Also check public/ directory pattern (older ST installs)
   let effectiveDataDir = stDataDir;
   if (!existsSync(stDataDir)) {
-    const altDir = join(stPath, "public", "characters")
-      ? join(stPath, "public")
-      : stDataDir;
     if (existsSync(join(stPath, "public", "characters"))) {
       effectiveDataDir = join(stPath, "public");
       console.log(`  ${theme.muted}Using legacy directory structure: public/${theme.reset}`);
@@ -1035,9 +1246,79 @@ async function main() {
 
   printDivider();
 
-  // ─── Step 3: Select What to Import ──────────────────────────────────────
+  // ─── Step 3: Pre-flight scan ─────────────────────────────────────────────
 
-  printStepHeader(3, 6, "Select Import Scope", "Choose what to migrate.");
+  printStepHeader(3, 7, "Pre-flight Scan", "Checking character files for potential issues.");
+
+  // Check for an existing checkpoint from a previous run
+  const checkpoint = loadCheckpoint(effectiveDataDir);
+  let resumedFromCheckpoint = false;
+  let filenameToId = new Map<string, string>();
+
+  if (checkpoint && checkpoint.baseUrl === baseUrl) {
+    const savedAt = new Date(checkpoint.savedAt).toLocaleString();
+    console.log(`  ${theme.warning}Found a saved checkpoint from ${savedAt}.${theme.reset}`);
+    console.log(`  ${theme.muted}This contains ${Object.keys(checkpoint.filenameToId).length} previously imported character ID mappings.${theme.reset}\n`);
+    const resumeAns = await ask("Resume from checkpoint? (skips character re-import)", "y");
+    if (resumeAns.toLowerCase() === "y") {
+      filenameToId = new Map(Object.entries(checkpoint.filenameToId));
+      resumedFromCheckpoint = true;
+      console.log(`  ${theme.success}✓ Loaded ${filenameToId.size} character mappings from checkpoint.${theme.reset}\n`);
+    }
+  }
+
+  if (!resumedFromCheckpoint && counts.characters > 0) {
+    const charsDir = join(effectiveDataDir, "characters");
+    console.log(`  ${theme.muted}Checking ${counts.characters} PNG files for read errors...${theme.reset}\n`);
+    const scan = scanCharacters(charsDir);
+
+    const noData = scan.filter((e) => !e.hasData);
+    const parseErrors = scan.filter((e) => e.hasData && e.parseError);
+
+    if (noData.length === 0 && parseErrors.length === 0) {
+      console.log(`  ${theme.success}✓ All ${scan.length} character files look good.${theme.reset}\n`);
+    } else {
+      if (noData.length > 0) {
+        console.log(`  ${theme.muted}${noData.length} PNG(s) have no embedded character data — they will be imported using their filename as the name.${theme.reset}`);
+        const shown = noData.slice(0, 5);
+        for (const e of shown) {
+          console.log(`    ${theme.muted}·${theme.reset} ${e.filename}`);
+        }
+        if (noData.length > 5) {
+          console.log(`    ${theme.muted}... and ${noData.length - 5} more${theme.reset}`);
+        }
+        console.log("");
+      }
+
+      if (parseErrors.length > 0) {
+        console.log(`  ${theme.warning}${parseErrors.length} PNG(s) have unreadable embedded data and may fail to import:${theme.reset}`);
+        const shown = parseErrors.slice(0, 5);
+        for (const e of shown) {
+          console.log(`    ${theme.warning}·${theme.reset} ${e.filename} ${theme.muted}(${e.parseError})${theme.reset}`);
+        }
+        if (parseErrors.length > 5) {
+          console.log(`    ${theme.muted}... and ${parseErrors.length - 5} more${theme.reset}`);
+        }
+        console.log("");
+
+        const proceedAns = await ask("Continue with migration? (y/n)", "y");
+        if (proceedAns.toLowerCase() !== "y") {
+          rl.close();
+          return;
+        }
+      }
+    }
+  }
+
+  printDivider();
+
+  // ─── Step 4: Select What to Import ──────────────────────────────────────
+
+  printStepHeader(4, 7, "Select Import Scope", "Choose what to migrate.");
+
+  if (resumedFromCheckpoint) {
+    console.log(`  ${theme.muted}Resuming from checkpoint — character import will be skipped.${theme.reset}\n`);
+  }
 
   console.log("    1. Characters only");
   console.log("    2. World Books only");
@@ -1049,7 +1330,7 @@ async function main() {
 
   const choice = await ask("Selection", "5");
 
-  let doCharacters = false;
+  let doCharacters = !resumedFromCheckpoint;
   let doWorldBooks = false;
   let doPersonas = false;
   let doChats = false;
@@ -1057,29 +1338,33 @@ async function main() {
 
   switch (choice) {
     case "1":
-      doCharacters = true;
+      doCharacters = !resumedFromCheckpoint;
       break;
     case "2":
+      doCharacters = false;
       doWorldBooks = true;
       break;
     case "3":
+      doCharacters = false;
       doPersonas = true;
       break;
     case "4":
-      doCharacters = true;
+      doCharacters = !resumedFromCheckpoint;
       doChats = true;
       doGroupChats = true;
       break;
     case "5":
-      doCharacters = true;
+      doCharacters = !resumedFromCheckpoint;
       doWorldBooks = true;
       doPersonas = true;
       doChats = true;
       doGroupChats = true;
       break;
     case "6": {
-      const cAns = await ask("Import characters? (y/n)", "y");
-      doCharacters = cAns.toLowerCase() === "y";
+      if (!resumedFromCheckpoint) {
+        const cAns = await ask("Import characters? (y/n)", "y");
+        doCharacters = cAns.toLowerCase() === "y";
+      }
       const wAns = await ask("Import world books? (y/n)", "y");
       doWorldBooks = wAns.toLowerCase() === "y";
       const pAns = await ask("Import personas? (y/n)", "y");
@@ -1091,7 +1376,7 @@ async function main() {
       break;
     }
     default:
-      doCharacters = true;
+      doCharacters = !resumedFromCheckpoint;
       doWorldBooks = true;
       doPersonas = true;
       doChats = true;
@@ -1099,7 +1384,7 @@ async function main() {
   }
 
   // Warn if chats selected without characters
-  if ((doChats || doGroupChats) && !doCharacters) {
+  if ((doChats || doGroupChats) && !doCharacters && !resumedFromCheckpoint) {
     console.log(`\n  ${theme.warning}Chat import requires characters to exist in Lumiverse.${theme.reset}`);
     const addChars = await ask("Also import characters? (y/n)", "y");
     if (addChars.toLowerCase() === "y") {
@@ -1110,11 +1395,11 @@ async function main() {
   console.log("");
   printDivider();
 
-  // ─── Step 4: Execute Import ─────────────────────────────────────────────
+  // ─── Step 5: Execute Import ─────────────────────────────────────────────
 
-  printStepHeader(4, 6, "Importing", "This may take a while for large collections.");
+  printStepHeader(5, 7, "Importing", "This may take a while for large collections.");
 
-  let charResult = { imported: 0, skipped: 0, failed: 0, filenameToId: new Map<string, string>() };
+  let charResult = { imported: 0, skipped: 0, failed: 0, filenameToId, failedFiles: [] as Array<{ filename: string; reason: string }> };
   let wbResult = { imported: 0, failed: 0, totalEntries: 0, nameToId: new Map<string, string>() };
   let personaResult = { imported: 0, failed: 0, avatarsUploaded: 0 };
   let chatResult = { imported: 0, failed: 0, totalMessages: 0, skippedChars: 0 };
@@ -1124,7 +1409,20 @@ async function main() {
   if (doCharacters && counts.characters > 0) {
     console.log(`\n  ${theme.bold}Characters${theme.reset}`);
     charResult = await importCharacters(effectiveDataDir);
+    // Merge newly imported IDs into our map (checkpoint may already have some)
+    for (const [k, v] of charResult.filenameToId) {
+      filenameToId.set(k, v);
+    }
+    charResult.filenameToId = filenameToId;
     console.log(`  ${theme.success}Done:${theme.reset} ${charResult.imported} imported, ${charResult.skipped} skipped, ${charResult.failed} failed`);
+
+    // Save checkpoint so chat import can resume if something fails later
+    saveCheckpoint(effectiveDataDir, {
+      baseUrl,
+      effectiveDataDir,
+      filenameToId: Object.fromEntries(filenameToId),
+      savedAt: Date.now(),
+    });
   }
 
   // 2. World Books
@@ -1144,7 +1442,7 @@ async function main() {
   // 4. Chats
   if (doChats && counts.totalChatFiles > 0) {
     console.log(`\n  ${theme.bold}Chat History${theme.reset}`);
-    chatResult = await importChats(effectiveDataDir, charResult.filenameToId);
+    chatResult = await importChats(effectiveDataDir, filenameToId);
     console.log(`  ${theme.success}Done:${theme.reset} ${chatResult.imported} chats (${chatResult.totalMessages} messages), ${chatResult.failed} failed`);
     if (chatResult.skippedChars > 0) {
       console.log(`  ${theme.warning}${chatResult.skippedChars} character(s) not found — their chats were skipped${theme.reset}`);
@@ -1154,7 +1452,7 @@ async function main() {
   // 5. Group Chats
   if (doGroupChats && counts.groupChats > 0) {
     console.log(`\n  ${theme.bold}Group Chats${theme.reset}`);
-    groupChatResult = await importGroupChats(effectiveDataDir, charResult.filenameToId);
+    groupChatResult = await importGroupChats(effectiveDataDir, filenameToId);
     console.log(`  ${theme.success}Done:${theme.reset} ${groupChatResult.imported} chats (${groupChatResult.totalMessages} messages), ${groupChatResult.failed} failed`);
     if (groupChatResult.skippedGroups > 0) {
       console.log(`  ${theme.warning}${groupChatResult.skippedGroups} group(s) skipped — no members found${theme.reset}`);
@@ -1164,9 +1462,9 @@ async function main() {
   console.log("");
   printDivider();
 
-  // ─── Step 5: Summary ────────────────────────────────────────────────────
+  // ─── Step 6: Summary ────────────────────────────────────────────────────
 
-  printStepHeader(5, 6, "Summary", "Migration results.");
+  printStepHeader(6, 7, "Summary", "Migration results.");
 
   const summaryItems: Array<{ label: string; value: string }> = [];
   const warnings: string[] = [];
@@ -1210,14 +1508,35 @@ async function main() {
     (doGroupChats ? groupChatResult.failed : 0);
 
   if (totalFailed > 0) {
-    warnings.push(`${totalFailed} item(s) failed to import. Check the output above for details.`);
+    warnings.push(`${totalFailed} item(s) failed to import.`);
   }
 
   printSummary("Migration Complete", summaryItems, warnings);
 
-  // ─── Step 6: Post-Migration Notes ───────────────────────────────────────
+  // Show per-file failure details if any characters failed
+  if (charResult.failedFiles.length > 0) {
+    console.log(`  ${theme.warning}Failed character files:${theme.reset}`);
+    const shown = charResult.failedFiles.slice(0, 15);
+    for (const f of shown) {
+      console.log(`    ${theme.muted}·${theme.reset} ${f.filename}  ${theme.muted}${f.reason}${theme.reset}`);
+    }
+    if (charResult.failedFiles.length > 15) {
+      console.log(`    ${theme.muted}... and ${charResult.failedFiles.length - 15} more${theme.reset}`);
+    }
+    console.log("");
+  }
 
-  printStepHeader(6, 6, "Next Steps");
+  // Clean up checkpoint on successful completion (no failures)
+  if (totalFailed === 0) {
+    deleteCheckpoint(effectiveDataDir);
+  } else {
+    console.log(`  ${theme.muted}Checkpoint saved — re-run the tool and choose "Resume from checkpoint" to retry${theme.reset}`);
+    console.log(`  ${theme.muted}without re-importing characters that already succeeded.${theme.reset}\n`);
+  }
+
+  // ─── Step 7: Post-Migration Notes ───────────────────────────────────────
+
+  printStepHeader(7, 7, "Next Steps");
 
   console.log(`  ${theme.muted}1.${theme.reset} Refresh your Lumiverse browser tab to see imported content.`);
   console.log(`  ${theme.muted}2.${theme.reset} SillyTavern presets are not imported (architecture mismatch with Loom).`);

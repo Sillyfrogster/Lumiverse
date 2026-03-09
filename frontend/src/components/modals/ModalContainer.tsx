@@ -13,6 +13,7 @@ import GroupChatCreatorModal from './GroupChatCreatorModal'
 import ManageChatsModal from './ManageChatsModal'
 import ChatPickerModal from './ChatPickerModal'
 import PermissionRequestModal from './PermissionRequestModal'
+import CommandPalette from './CommandPalette'
 
 export default function ModalContainer() {
   const settingsModalOpen = useStore((s) => s.settingsModalOpen)
@@ -88,6 +89,7 @@ export default function ModalContainer() {
       {activeModal === 'toolEditor' && <ToolEditorModal />}
 
       <PermissionRequestModal />
+      <CommandPalette />
     </>
   )
 }

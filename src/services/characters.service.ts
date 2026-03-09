@@ -172,6 +172,24 @@ export function characterExistsByName(userId: string, name: string): boolean {
   return !!row;
 }
 
+export function findCharacterBySourceFilename(userId: string, sourceFilename: string): Character | null {
+  const row = getDb()
+    .query(
+      "SELECT * FROM characters WHERE user_id = ? AND json_extract(extensions, '$._lumiverse_source_filename') = ? LIMIT 1"
+    )
+    .get(userId, sourceFilename) as any;
+  return row ? rowToCharacter(row) : null;
+}
+
+export function setCharacterSourceFilename(userId: string, id: string, sourceFilename: string): void {
+  const char = getCharacter(userId, id);
+  if (!char) return;
+  const extensions = { ...(char.extensions ?? {}), _lumiverse_source_filename: sourceFilename };
+  getDb()
+    .query("UPDATE characters SET extensions = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+    .run(JSON.stringify(extensions), Math.floor(Date.now() / 1000), id, userId);
+}
+
 export function deleteCharacter(userId: string, id: string): boolean {
   const result = getDb().query("DELETE FROM characters WHERE id = ? AND user_id = ?").run(id, userId);
   if (result.changes > 0) {

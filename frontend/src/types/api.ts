@@ -91,6 +91,17 @@ export interface ChatSummary {
   updated_at: number;
 }
 
+// ---- Chat Branch Tree ----
+export interface ChatTreeNode {
+  id: string;
+  name: string;
+  created_at: number;
+  updated_at: number;
+  message_count: number;
+  branch_at_message: string | null;
+  children: ChatTreeNode[];
+}
+
 // ---- Group Chat ----
 export interface CreateGroupChatInput {
   character_ids: string[];

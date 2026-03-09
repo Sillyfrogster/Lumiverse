@@ -132,13 +132,31 @@ app.post("/import-bulk", async (c) => {
         }
 
         // Deduplication check
-        if (skipDuplicates && svc.characterExistsByName(userId, cardInput.name)) {
-          const existing = svc.findCharactersByName(userId, cardInput.name);
-          results.push({ filename, success: true, skipped: true, character: existing[0] });
-          continue;
+        if (skipDuplicates) {
+          const hasRealFilename = filename && filename !== "unknown" && filename !== "";
+          const existingByFile = hasRealFilename
+            ? svc.findCharacterBySourceFilename(userId, filename)
+            : null;
+
+          if (existingByFile) {
+            results.push({ filename, success: true, skipped: true, character: existingByFile });
+            continue;
+          }
+
+          // No filename match — fall back to name-based check only when filename is absent
+          if (!hasRealFilename && svc.characterExistsByName(userId, cardInput.name)) {
+            const existing = svc.findCharactersByName(userId, cardInput.name);
+            results.push({ filename, success: true, skipped: true, character: existing[0] });
+            continue;
+          }
         }
 
         const character = svc.createCharacter(userId, cardInput);
+
+        // Store source filename so re-imports can deduplicate by file identity
+        if (filename && filename !== "unknown" && filename !== "") {
+          svc.setCharacterSourceFilename(userId, character.id, filename);
+        }
 
         if (isPng) {
           const image = await images.uploadImage(userId, file);

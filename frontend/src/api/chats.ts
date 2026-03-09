@@ -2,7 +2,7 @@ import { get, post, put, del } from './client'
 import type {
   Chat, CreateChatInput, CreateGroupChatInput, RecentChat, Message,
   CreateMessageInput, UpdateMessageInput, PaginatedResult,
-  GroupedRecentChat, ChatSummary
+  GroupedRecentChat, ChatSummary, ChatTreeNode
 } from '@/types/api'
 
 export const chatsApi = {
@@ -51,6 +51,10 @@ export const chatsApi = {
 
   branch(chatId: string, messageId: string) {
     return post<Chat>(`/chats/${chatId}/branch`, { message_id: messageId })
+  },
+
+  getTree(chatId: string) {
+    return get<ChatTreeNode>(`/chats/${chatId}/tree`)
   },
 }
 
