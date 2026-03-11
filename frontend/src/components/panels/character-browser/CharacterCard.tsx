@@ -30,7 +30,7 @@ export default memo(function CharacterCard({
   onToggleFavorite,
   onToggleBatch,
 }: CharacterCardProps) {
-  const avatarUrl = charactersApi.avatarUrl(character.id)
+  const avatarUrl = charactersApi.avatarUrl(character.id) + (character.image_id ? `?v=${character.image_id}` : '')
   const tags = character.tags?.slice(0, 3) || []
   const extraTagCount = (character.tags?.length || 0) - 3
 
