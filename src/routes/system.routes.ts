@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { cpus, totalmem, freemem, platform, arch, release, hostname } from "os";
-import { readFileSync, execSync } from "fs";
+import { readFileSync } from "fs";
+import { execSync } from "child_process";
 import { join } from "path";
 
 const app = new Hono();
