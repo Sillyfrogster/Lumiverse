@@ -11,6 +11,13 @@
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
+/* In standalone PWA mode, iOS Safari can miscalculate 100dvh to be
+   smaller than the actual viewport from the fixed html/body chain.
+   Remove the dvh clamp so .app fills the full screen via height:100%. */
+:global(html[data-pwa]) .app {
+  max-height: none;
+}
+
 .main {
   flex: 1 1 0;
   display: flex;
