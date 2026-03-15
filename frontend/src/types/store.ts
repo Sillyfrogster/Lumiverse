@@ -36,7 +36,7 @@ export interface ChatSlice {
 
 // ---- Characters Slice ----
 export type CharacterFilterTab = 'all' | 'characters' | 'favorites' | 'groups'
-export type CharacterSortField = 'name' | 'recent' | 'created'
+export type CharacterSortField = 'name' | 'recent' | 'created' | 'shuffle'
 export type CharacterSortDirection = 'asc' | 'desc'
 export type CharacterViewMode = 'grid' | 'columns' | 'list'
 

@@ -47,6 +47,9 @@ export function useCharacterBrowser() {
   const removeCharacters = useStore((s) => s.removeCharacters)
   const updateCharacterInStore = useStore((s) => s.updateCharacter)
 
+  // Shuffle state — seed triggers backend re-fetch
+  const [shuffleSeed, setShuffleSeed] = useState(() => Math.floor(Date.now() / 86_400_000))
+
   // Local state
   const [loading, setLoading] = useState(false)
   const [importLoading, setImportLoading] = useState(false)
@@ -75,8 +78,14 @@ export function useCharacterBrowser() {
       let all: Character[] = []
       let offset = 0
       let total = Infinity
+      const params: { limit: number; offset: number; sort?: string; seed?: number } = { limit: PAGE, offset: 0 }
+      if (sortField === 'shuffle') {
+        params.sort = 'discover'
+        params.seed = shuffleSeed
+      }
       while (offset < total) {
-        const result = await charactersApi.list({ limit: PAGE, offset })
+        params.offset = offset
+        const result = await charactersApi.list(params)
         all = all.concat(result.data)
         total = result.total
         offset += result.data.length
@@ -87,7 +96,30 @@ export function useCharacterBrowser() {
     loadAll()
       .catch((err) => console.error('[CharacterBrowser] Failed to load:', err))
       .finally(() => setLoading(false))
-  }, [charactersLoaded, setCharacters])
+  }, [charactersLoaded, setCharacters, sortField, shuffleSeed])
+
+  // Re-fetch from backend when entering shuffle mode or reshuffling
+  useEffect(() => {
+    if (sortField !== 'shuffle' || !charactersLoaded) return
+    setLoading(true)
+    const loadShuffled = async () => {
+      const PAGE = 200
+      let all: Character[] = []
+      let offset = 0
+      let total = Infinity
+      while (offset < total) {
+        const result = await charactersApi.list({ limit: PAGE, offset, sort: 'discover', seed: shuffleSeed })
+        all = all.concat(result.data)
+        total = result.total
+        offset += result.data.length
+        if (result.data.length < PAGE) break
+      }
+      setCharacters(all)
+    }
+    loadShuffled()
+      .catch((err) => console.error('[CharacterBrowser] Failed to load shuffled:', err))
+      .finally(() => setLoading(false))
+  }, [sortField, shuffleSeed, charactersLoaded, setCharacters])
 
   // Fuse.js instance
   const fuse = useMemo(
@@ -141,30 +173,41 @@ export function useCharacterBrowser() {
       result = result.filter((c) => searchIds.has(c.id))
     }
 
-    // 4. Sort
-    result = [...result].sort((a, b) => {
-      let cmp = 0
-      switch (sortField) {
-        case 'name':
-          cmp = a.name.localeCompare(b.name)
-          break
-        case 'recent':
-          cmp = (b.updated_at || 0) - (a.updated_at || 0)
-          break
-        case 'created':
-          cmp = (b.created_at || 0) - (a.created_at || 0)
-          break
-      }
-      return sortDirection === 'desc' ? -cmp : cmp
-    })
+    // 4. Sort (shuffle mode preserves backend order)
+    if (sortField !== 'shuffle') {
+      result = [...result].sort((a, b) => {
+        let cmp = 0
+        switch (sortField) {
+          case 'name':
+            cmp = a.name.localeCompare(b.name)
+            break
+          case 'recent':
+            cmp = (b.updated_at || 0) - (a.updated_at || 0)
+            break
+          case 'created':
+            cmp = (b.created_at || 0) - (a.created_at || 0)
+            break
+        }
+        return sortDirection === 'desc' ? -cmp : cmp
+      })
+    }
 
     return result
   }, [characters, filterTab, favorites, selectedTags, debouncedQuery, fuse, sortField, sortDirection])
 
+  // Reshuffle: when in shuffle mode, toggling direction generates a new seed
+  const handleToggleSortDirection = useCallback(() => {
+    if (sortField === 'shuffle') {
+      setShuffleSeed(Date.now())
+    } else {
+      toggleSortDirection()
+    }
+  }, [sortField, toggleSortDirection])
+
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1)
-  }, [filterTab, selectedTags, debouncedQuery, sortField, sortDirection])
+  }, [filterTab, selectedTags, debouncedQuery, sortField, sortDirection, shuffleSeed])
 
   // Paginate filtered results
   const totalPages = Math.max(1, Math.ceil(filteredCharacters.length / charactersPerPage))
@@ -465,7 +508,7 @@ export function useCharacterBrowser() {
     setSearchQuery,
     setFilterTab,
     setSortField,
-    toggleSortDirection,
+    toggleSortDirection: handleToggleSortDirection,
     setViewMode,
     setSelectedTags,
     toggleSelectedTag,

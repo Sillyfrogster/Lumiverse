@@ -196,6 +196,14 @@ async function fetchGenericCharacter(url: string, userId: string) {
 app.get("/", (c) => {
   const userId = c.get("userId");
   const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"));
+  const sort = c.req.query("sort");
+
+  if (sort === "discover") {
+    const rawSeed = c.req.query("seed");
+    const seed = rawSeed ? parseInt(rawSeed, 10) : undefined;
+    return c.json(svc.listCharactersDiscover(userId, pagination, isNaN(seed as number) ? undefined : seed));
+  }
+
   return c.json(svc.listCharacters(userId, pagination));
 });
 
