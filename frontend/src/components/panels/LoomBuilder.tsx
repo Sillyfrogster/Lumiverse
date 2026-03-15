@@ -49,11 +49,15 @@ import {
   Dice1,
   StopCircle,
   Maximize2,
+  Camera,
+  Link,
+  Unlink,
 } from 'lucide-react'
 import clsx from 'clsx'
 import ExpandedTextEditor from '@/components/shared/ExpandedTextEditor'
 import { resolveMacros as resolveMacrosApi } from '@/api/macros'
 import { useLoomBuilder } from '@/hooks/useLoomBuilder'
+import { usePresetProfiles } from '@/hooks/usePresetProfiles'
 import { createBlock, createMarkerBlock } from '@/lib/loom/service'
 import {
   MARKER_NAMES,
@@ -1131,6 +1135,8 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
     exportInternal,
   } = useLoomBuilder()
 
+  const presetProfiles = usePresetProfiles(activePresetId, activePreset?.blocks)
+
   const [view, setView] = useState<'list' | 'edit'>('list')
   const [editingBlock, setEditingBlock] = useState<PromptBlock | null>(null)
   const [promptMenuOpen, setPromptMenuOpen] = useState(false)
@@ -1353,6 +1359,94 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
           </div>
         )
       })()}
+
+      {/* Preset Profile Bindings */}
+      {activePreset && (
+        <div className={s.profileBar}>
+          <span className={s.profileLabel}>Profiles</span>
+          <div className={s.profileBtnGroup}>
+            {/* Capture / clear defaults */}
+            {!presetProfiles.hasDefaults ? (
+              <button
+                className={s.profileBtn}
+                onClick={presetProfiles.captureDefaults}
+                disabled={presetProfiles.isLoading}
+                title="Capture current block states as defaults"
+                type="button"
+              >
+                <Camera size={10} /> Capture Defaults
+              </button>
+            ) : (
+              <button
+                className={clsx(s.profileBtn, s.profileBtnActive)}
+                onClick={presetProfiles.clearDefaults}
+                disabled={presetProfiles.isLoading}
+                title="Clear default block states"
+                type="button"
+              >
+                <Camera size={10} /> Defaults
+                <X size={8} />
+              </button>
+            )}
+
+            {/* Bind / unbind character */}
+            {!presetProfiles.hasCharacterBinding ? (
+              <button
+                className={s.profileBtn}
+                onClick={presetProfiles.bindToCharacter}
+                disabled={!presetProfiles.hasDefaults || presetProfiles.isLoading || !activePreset}
+                title={!presetProfiles.hasDefaults ? 'Capture defaults first' : 'Bind current block states to this character'}
+                type="button"
+              >
+                <Link size={10} /> Character
+              </button>
+            ) : (
+              <button
+                className={clsx(s.profileBtn, s.profileBtnActive)}
+                onClick={presetProfiles.unbindCharacter}
+                disabled={presetProfiles.isLoading}
+                title="Remove character binding"
+                type="button"
+              >
+                <Unlink size={10} /> Character
+                <X size={8} />
+              </button>
+            )}
+
+            {/* Bind / unbind chat */}
+            {!presetProfiles.hasChatBinding ? (
+              <button
+                className={s.profileBtn}
+                onClick={presetProfiles.bindToChat}
+                disabled={!presetProfiles.hasDefaults || presetProfiles.isLoading || !activePreset}
+                title={!presetProfiles.hasDefaults ? 'Capture defaults first' : 'Bind current block states to this chat'}
+                type="button"
+              >
+                <Link size={10} /> Chat
+              </button>
+            ) : (
+              <button
+                className={clsx(s.profileBtn, s.profileBtnActive)}
+                onClick={presetProfiles.unbindChat}
+                disabled={presetProfiles.isLoading}
+                title="Remove chat binding"
+                type="button"
+              >
+                <Unlink size={10} /> Chat
+                <X size={8} />
+              </button>
+            )}
+          </div>
+
+          {/* Active source indicator */}
+          {presetProfiles.activeSource !== 'none' && (
+            <span className={s.profileSourceBadge}>
+              {presetProfiles.activeSource === 'chat' ? 'CHAT' :
+               presetProfiles.activeSource === 'character' ? 'CHAR' : 'DEFAULT'}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Scrollable content: settings + block list */}
       <div className={s.scrollArea} ref={scrollAreaRef} onScroll={handleScrollCapture}>

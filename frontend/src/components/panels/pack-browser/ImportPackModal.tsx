@@ -40,11 +40,11 @@ function transformLucidPack(packData: any, catalogEntry: any) {
   }
 
   return {
-    name: packData.packName || catalogEntry.packName || 'Unknown Pack',
-    author: packData.packAuthor || catalogEntry.packAuthor || '',
+    name: packData.name || packData.packName || catalogEntry.packName || 'Unknown Pack',
+    author: packData.author ?? packData.packAuthor ?? catalogEntry.packAuthor ?? '',
     coverUrl: packData.coverUrl || catalogEntry.coverUrl || undefined,
     version: String(packData.version || 1),
-    sourceUrl: `https://lucid.cards/api/lumia-dlc/${catalogEntry.slug}`,
+    sourceUrl: catalogEntry.slug ? `https://lucid.cards/api/lumia-dlc/${catalogEntry.slug}` : undefined,
     extras: packData.packExtras?.length ? { items: packData.packExtras } : {},
     lumiaItems: (packData.lumiaItems || []).map((item: any) => ({
       name: item.lumiaName || item.name || 'Unknown',
@@ -193,13 +193,19 @@ export default function ImportPackModal({ onImport, onClose }: Props) {
     if (lastImportedPack) onImport(lastImportedPack)
   }, [selectedPacks, importing, onImport])
 
-  // File import
+  // File import — unwrap { pack: {...} } wrapper if present (extension export format)
   const handleFile = useCallback(async (file: File) => {
     setFileError(null)
     setFileLoading(true)
     try {
       const text = await file.text()
-      const payload = JSON.parse(text)
+      const raw = JSON.parse(text)
+      // Unwrap wrapper objects from extension exports
+      const payload = raw.pack && typeof raw.pack === 'object' && !Array.isArray(raw.pack)
+        ? transformLucidPack(raw.pack, raw.pack)
+        : (raw.packName || raw.lumiaItems?.some((i: any) => i.lumiaName || i.lumiaDefinition))
+          ? transformLucidPack(raw, raw)
+          : raw
       const pack = await packsApi.importJson(payload)
       onImport(pack)
     } catch (e: any) {
