@@ -20,6 +20,7 @@ import * as settingsSvc from "./settings.service";
 import * as packsSvc from "./packs.service";
 import * as embeddingsSvc from "./embeddings.service";
 import * as imagesSvc from "./images.service";
+import * as presetProfilesSvc from "./preset-profiles.service";
 import { getCouncilSettings } from "./council/council-settings.service";
 import { getDb } from "../db/connection";
 import { readFileSync } from "fs";
@@ -175,11 +176,25 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   }
 
   // Extract Loom structures from preset
-  const blocks: PromptBlock[] = preset?.prompt_order ?? [];
+  const blocks: PromptBlock[] = (preset?.prompt_order ?? []).map((b: PromptBlock) => ({ ...b }));
   const prompts = preset?.prompts ?? {};
   const promptBehavior: PromptBehavior = prompts.promptBehavior ?? {};
   const completionSettings: CompletionSettings = prompts.completionSettings ?? {};
   const samplerOverrides: SamplerOverrides | null = preset?.parameters?.samplerOverrides ?? null;
+
+  // Apply preset profile binding — override block enabled states based on
+  // chat/character/default binding (if one exists for this preset)
+  if (resolvedPresetId && blocks.length) {
+    const resolved = presetProfilesSvc.resolveProfile(
+      ctx.userId,
+      resolvedPresetId,
+      chat.id,
+      characterId
+    );
+    if (resolved.binding) {
+      presetProfilesSvc.applyProfileToBlocks(blocks, resolved.binding);
+    }
+  }
 
   // If no blocks, fall back to legacy mapping
   if (!blocks.length) {

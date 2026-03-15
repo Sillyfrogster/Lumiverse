@@ -1,4 +1,4 @@
-import type { Message, Character, Persona, Preset, ConnectionProfile, ProviderInfo, RecentChat, Pack, PackWithItems, LumiaItem } from './api'
+import type { Message, Character, Persona, Preset, ConnectionProfile, ProviderInfo, RecentChat, Pack, PackWithItems, LumiaItem, LoomItem } from './api'
 
 // ---- Chat Slice ----
 export interface ChatSlice {
@@ -327,6 +327,9 @@ export interface PacksSlice {
   selectedDefinition: LumiaItem | null
   selectedBehaviors: LumiaItem[]
   selectedPersonalities: LumiaItem[]
+  selectedLoomStyles: LoomItem[]
+  selectedLoomUtils: LoomItem[]
+  selectedLoomRetrofits: LoomItem[]
   packsWithItems: Record<string, PackWithItems>
 
   setPacks: (packs: Pack[]) => void
@@ -340,6 +343,9 @@ export interface PacksSlice {
   setSelectedDefinition: (def: LumiaItem | null) => void
   setSelectedBehaviors: (behaviors: LumiaItem[]) => void
   setSelectedPersonalities: (personalities: LumiaItem[]) => void
+  setSelectedLoomStyles: (items: LoomItem[]) => void
+  setSelectedLoomUtils: (items: LoomItem[]) => void
+  setSelectedLoomRetrofits: (items: LoomItem[]) => void
   setPackWithItems: (id: string, data: PackWithItems) => void
   removePackWithItems: (id: string) => void
 }

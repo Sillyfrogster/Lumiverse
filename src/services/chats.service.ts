@@ -717,6 +717,17 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+  function stripReasoningTags(content: string): string {                                                                                                                       
+    // Remove complete (closed) reasoning blocks                                                                                                                               
+    let stripped = content.replace(                                                                                                                                            
+      /\s*<(think|thinking|reasoning)>[\s\S]*?<\/\1>\s*/gi,                                                                                                                    
+      ""                                                                                                                                                                       
+    );                                                                                                                                                                         
+    // Remove unclosed reasoning tags (interrupted generation)                                                                                                                 
+    stripped = stripped.replace(/\s*<(think|thinking|reasoning)>[\s\S]*$/i, "");                                                                                               
+    return stripped.trim();                                                                                                                                                    
+  } 
+
 interface ChatChunk {
   id: string;
   chat_id: string;
@@ -802,7 +813,7 @@ async function shouldStartNewChunk(lastChunk: ChatChunk, newMessage: Message, us
 function createChatChunk(chatId: string, messages: Message[]): ChatChunk {
   const now = Math.floor(Date.now() / 1000);
   const id = crypto.randomUUID();
-  const content = messages.map(m => `[${m.name}]: ${m.content}`).join("\n");
+  const content = messages.map(m => `[${m.name}]: ${stripReasoningTags(m.content)}`).join("\n")
   const tokenCount = estimateTokens(content);
   const messageIds = messages.map(m => m.id);
 
@@ -839,7 +850,7 @@ function appendToChunk(chunkId: string, message: Message): void {
   const messageIds = JSON.parse(chunk.message_ids);
   messageIds.push(message.id);
 
-  const newContent = chunk.content + `\n[${message.name}]: ${message.content}`;
+  const newContent = chunk.content + `\n[${message.name}]: ${stripReasoningTags(message.content)}`;
   const newTokenCount = estimateTokens(newContent);
   const now = Math.floor(Date.now() / 1000);
 
