@@ -31,6 +31,7 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'activeProfileId',
   'activePersonaId',
   'activeLoomPresetId',
+  'activeLumiPresetId',
   // Character browser preferences
   'favorites',
   'viewMode',

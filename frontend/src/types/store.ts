@@ -288,11 +288,15 @@ export interface PresetsSlice {
   presets: Record<string, Preset>
   activePresetId: string | null
   activeLoomPresetId: string | null
+  activeLumiPresetId: string | null
   loomRegistry: Record<string, LoomRegistryEntry>
   setPresets: (presets: Record<string, Preset>) => void
   setActivePreset: (id: string | null) => void
   setActiveLoomPreset: (id: string | null) => void
+  setActiveLumiPreset: (id: string | null) => void
   setLoomRegistry: (registry: Record<string, LoomRegistryEntry>) => void
+  /** Prefers Lumi preset when set. */
+  getActivePresetForGeneration: () => string | null
 }
 
 // ---- Connections Slice ----
@@ -484,6 +488,21 @@ export interface WorldInfoSlice {
   clearActivatedWorldInfo: () => void
 }
 
+// Lumi Feedback Slice
+import type { LumiModuleDonePayload, LumiPipelineCompletedPayload } from './ws-events'
+
+export interface LumiSlice {
+  lumiExecuting: boolean
+  lumiResults: LumiModuleDonePayload[]
+  lumiPipelineResult: LumiPipelineCompletedPayload | null
+
+  setLumiExecuting: (executing: boolean) => void
+  setLumiResults: (results: LumiModuleDonePayload[]) => void
+  addLumiResult: (result: LumiModuleDonePayload) => void
+  setLumiPipelineResult: (result: LumiPipelineCompletedPayload | null) => void
+  clearLumiResults: () => void
+}
+
 // ---- Group Chat Slice ----
 export interface GroupChatSlice {
   isGroupChat: boolean
@@ -574,6 +593,7 @@ export type AppStore = ChatSlice &
   ConnectionsSlice &
   PacksSlice &
   CouncilSlice &
+  LumiSlice &
   GenerationSlice &
   SummarySlice &
   SpindleSlice &

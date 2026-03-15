@@ -282,6 +282,27 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   // Populate Lumia / Loom / Council / OOC / Sovereign Hand context for macros
   populateLumiaLoomContext(macroEnv, ctx.userId, chat, ctx, settingsMap);
 
+  // Inject Lumi pipeline results into macroEnv (if present)
+  if (ctx.lumiPipelineResults && ctx.lumiPipelineResults.size > 0) {
+    const pipelineResults = ctx.lumiPipelineResults;
+    const moduleNames = new Map<string, string>();
+    const lumiMeta = preset?.metadata as any;
+    if (lumiMeta?.pipelines) {
+      for (const pipeline of lumiMeta.pipelines) {
+        if (Array.isArray(pipeline.modules)) {
+          for (const mod of pipeline.modules) {
+            moduleNames.set(mod.key, mod.name);
+          }
+        }
+      }
+    }
+    macroEnv.extra.lumiPipeline = {
+      results: pipelineResults,
+      moduleNames,
+    };
+    console.log("[lumi-assembly] Injected %d pipeline results into macroEnv. Module names: %s", pipelineResults.size, [...moduleNames.values()].join(", "));
+  }
+
   // ---- Impersonate one-liner mode: skip preset blocks, just chat history + impersonation prompt ----
   if (ctx.generationType === "impersonate" && ctx.impersonateMode === "oneliner") {
     return await onelinerImpersonation(messages, character, persona, chat, connection, preset, promptBehavior, completionSettings, samplerOverrides, ctx, macroEnv, reasoningVal);
@@ -718,7 +739,7 @@ async function applyGuidedGenerations(
  * When `settingsMap` is provided (from batch load), settings are read from it
  * instead of individual DB queries.
  */
-function populateLumiaLoomContext(
+export function populateLumiaLoomContext(
   macroEnv: MacroEnv,
   userId: string,
   chat: Chat,
@@ -829,7 +850,7 @@ function collectWorldInfoEntries(userId: string, character: Character, persona: 
   return collectWorldInfoSources(userId, character, persona, globalWorldBookIds).entries;
 }
 
-function collectWorldInfoSources(
+export function collectWorldInfoSources(
   userId: string,
   character: Character,
   persona: Persona | null,
